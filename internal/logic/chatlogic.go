@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"douyin-message/internal/svc"
-	"douyin-message/types"
+	__ "douyin-message/types"
 
 	"github.com/zeromicro/go-zero/core/logx"
 )
