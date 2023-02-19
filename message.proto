@@ -1,0 +1,100 @@
+syntax = "proto3";
+
+package message;
+
+option go_package = "./";
+
+message BaseResp {
+  StatusCode statusCode = 1;
+  string statusMessage = 2;
+}
+
+enum StatusCode {
+  OK = 0;
+  UNKONWN_ERROR = 1;
+  /**
+   * todo: business custom error code
+   */
+}
+
+message ChatResponseData {
+  /**
+   * 消息ID
+   */
+  string id = 1;
+  /**
+   * 消息内容
+   */
+  string content = 2;
+  /**
+   * 消息发送者id
+   */
+  string fromUserId = 3;
+  /**
+   * 消息接收者id
+   */
+  string toUserId = 4;
+  /**
+   * 消息发送时间, unix 时间戳，单位毫秒
+   */
+  int64 createTime = 5;
+}
+
+message ChatRequest {
+  /**
+   * 需要查询消息的用户ID
+   */
+  string toUserId = 1;
+}
+
+message ChatResponse {
+  ChatResponseData data = 1;
+  BaseResp baseResp = 2;
+}
+
+enum ActionType {
+  /**
+   * 发送消息，在 proto3 中，枚举值从 0 开始，需要与 api 网关中的枚举值区分开
+   */
+  SEND_MESSAGE = 0;
+}
+
+message ActionRequest {
+  /**
+   * 消息ID
+   */
+  string id = 1;
+  /**
+   * 消息内容
+   */
+  string content = 2;
+  /**
+   * 消息发送者id，可选
+   */
+  optional string fromUserId = 3;
+  /**
+   * 消息接收者id
+   */
+  string toUserId = 4;
+  /**
+   *  action 类型
+   */
+  ActionType actionType = 5;
+}
+
+/**
+ * action response data, return null
+ */
+message ActionResponseData {
+}
+
+
+message ActionResponse {
+  ActionResponseData data = 1;
+  BaseResp baseResp = 2;
+}
+
+service Message {
+  rpc Chat (ChatRequest) returns (ChatResponse) {};
+  rpc Action (ActionRequest) returns (ActionResponse) {};
+}
