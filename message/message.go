@@ -17,6 +17,7 @@ type (
 	ActionResponse     = __.ActionResponse
 	ActionResponseData = __.ActionResponseData
 	BaseResp           = __.BaseResp
+	ChatMessageItem    = __.ChatMessageItem
 	ChatRequest        = __.ChatRequest
 	ChatResponse       = __.ChatResponse
 	ChatResponseData   = __.ChatResponseData

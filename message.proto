@@ -11,40 +11,48 @@ message BaseResp {
 
 enum StatusCode {
   OK = 0;
-  UNKONWN_ERROR = 1;
+  UNKNOWN_ERROR = 1;
   /**
-   * todo: business custom error code
+   * 	TODO: 统一规定每个微服务的业务状态码，类似：1000200001 服务编号-状态码-业务编号
    */
+}
+
+message ChatMessageItem {
+  /**
+   * 消息ID
+   */
+   string id = 1;
+   /**
+    * 消息内容
+    */
+   string content = 2;
+   /**
+    * 消息发送者id
+    */
+   string fromUserId = 3;
+   /**
+    * 消息接收者id
+    */
+   string toUserId = 4;
+   /**
+    * 消息发送时间, unix 时间戳，单位毫秒
+    */
+   int64 createTime = 5;
 }
 
 message ChatResponseData {
   /**
-   * 消息ID
+   * 消息列表
    */
-  string id = 1;
-  /**
-   * 消息内容
-   */
-  string content = 2;
-  /**
-   * 消息发送者id
-   */
-  string fromUserId = 3;
-  /**
-   * 消息接收者id
-   */
-  string toUserId = 4;
-  /**
-   * 消息发送时间, unix 时间戳，单位毫秒
-   */
-  int64 createTime = 5;
+  repeated ChatMessageItem messageList  = 1;
 }
 
 message ChatRequest {
   /**
    * 需要查询消息的用户ID
    */
-  string toUserId = 1;
+  string userId = 1;
+  string toUserId = 2;
 }
 
 message ChatResponse {
@@ -61,17 +69,13 @@ enum ActionType {
 
 message ActionRequest {
   /**
-   * 消息ID
-   */
-  string id = 1;
-  /**
    * 消息内容
    */
   string content = 2;
   /**
-   * 消息发送者id，可选
+   * 消息发送者id
    */
-  optional string fromUserId = 3;
+  string fromUserId = 3;
   /**
    * 消息接收者id
    */
