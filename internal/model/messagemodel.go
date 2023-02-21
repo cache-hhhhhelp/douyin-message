@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/zeromicro/go-zero/core/stores/cache"
@@ -35,7 +36,8 @@ type (
 )
 
 const (
-	cachePrefix = "messageListUserId:"
+	cachePrefix      = "messageListUserId:"
+	inboxCachePrefix = "inboxList:"
 )
 
 // 自定义业务逻辑方法接口
@@ -61,34 +63,70 @@ func (m *businessMessageModel) GetMessageListByUserId(ctx context.Context, userI
 	var data Message
 
 	// find the message from cache
-	cacheKey := prefixMessageCacheKey + cachePrefix + userId
+	fromCacheKey := prefixMessageCacheKey + inboxCachePrefix + userId + ":" + toUserId
 
-	err = m.conn.FindOne(ctx, cacheKey, &data, bson.M{
-		"inboxUserId": userId,
-		// FIXME: 无法使用 $elemMatch 过滤数组中的元素，原因未知
-		// "messageList": bson.M{
-		// 	"$elemMatch": bson.M{
-		// 		"fromUserId": toUserId,
-		// 	},
-		// },
+	// 从缓存中查找
+	err = m.conn.GetCache(fromCacheKey, &data)
+	if err != nil && err != monc.ErrNotFound {
+		return nil, err
+	}
+
+	if data.ID != primitive.NilObjectID {
+		return &data, nil
+	}
+
+	var aggregatedData []Message
+
+	// 缓存中找不到，从数据库中查找
+	err = m.conn.Aggregate(ctx, &aggregatedData, bson.A{
+		bson.D{{"$match", bson.D{{"inboxUserId", userId}}}},
+		bson.D{
+			{"$project",
+				bson.D{
+					{"_id", true},
+					{"inboxUserId", true},
+					{"createAt", true},
+					{"updateAt", true},
+					{"messageList",
+						bson.D{
+							{"$filter",
+								bson.D{
+									{"input", "$messageList"},
+									{"as", "item"},
+									{"cond",
+										bson.D{
+											{"$eq",
+												bson.A{
+													"$$item.fromUserId",
+													toUserId,
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
 	})
 
 	switch err {
 	case nil:
-		// filter formUserId
-		var messageList []MessageItem
-		// FIXME: 无法使用 $elemMatch 过滤数组中的元素，原因未知，所以这里使用循环过滤
-		for _, item := range data.MessageList {
-			if item.FromUserId == toUserId {
-				messageList = append(messageList, item)
-			}
+		// 更新缓存
+		if len(aggregatedData) == 0 {
+			return &Message{}, nil
 		}
 
-		data.MessageList = messageList
-		return &data, nil
+		updateCacheErr := m.conn.SetCache(fromCacheKey, aggregatedData[0])
+		if updateCacheErr != nil {
+			return nil, updateCacheErr
+		}
+		return &aggregatedData[0], nil
 	case monc.ErrNotFound:
 		// 查不到当前用户名，返回空
-		return nil, nil
+		return &Message{}, nil
 	default:
 		return nil, err
 	}
@@ -97,7 +135,10 @@ func (m *businessMessageModel) GetMessageListByUserId(ctx context.Context, userI
 // 将消息放入用户的消息列表中
 func (m *businessMessageModel) PutMessageIntoUserMessageList(ctx context.Context, fromUserId string, toUserId string, content string) error {
 	now := time.Now()
+
 	cacheKey := prefixMessageCacheKey + cachePrefix + toUserId
+
+	fromUserCacheKey := prefixMessageCacheKey + inboxCachePrefix + toUserId + ":" + fromUserId
 
 	var data Message
 	// find the message
@@ -108,27 +149,48 @@ func (m *businessMessageModel) PutMessageIntoUserMessageList(ctx context.Context
 		return findOneErr
 	}
 
+	newData := Message{
+		ID:          primitive.NewObjectID(),
+		CreateAt:    now,
+		UpdateAt:    now,
+		InboxUserId: toUserId,
+		MessageList: []MessageItem{
+			{
+				Content:    content,
+				CreateAt:   now,
+				UpdateAt:   now,
+				FromUserId: fromUserId,
+				ToUserId:   toUserId,
+			},
+		},
+	}
+
 	if findOneErr == monc.ErrNotFound {
 		// insert
-		data = Message{
-			ID:          primitive.NewObjectID(),
-			CreateAt:    now,
-			UpdateAt:    now,
-			InboxUserId: toUserId,
-			MessageList: []MessageItem{
-				{
-					Content:    content,
-					CreateAt:   now,
-					UpdateAt:   now,
-					FromUserId: fromUserId,
-					ToUserId:   toUserId,
-				},
-			},
+		_, insertErr := m.conn.InsertOne(ctx, cacheKey, newData)
+		if insertErr != nil {
+			return insertErr
 		}
 
-		_, updateErr := m.conn.InsertOne(ctx, cacheKey, data)
-		if updateErr != nil {
-			return updateErr
+		cacheData := Message{}
+
+		// 更新缓存
+		formUserCacheErr := m.conn.GetCache(fromUserCacheKey, &cacheData)
+		if formUserCacheErr != nil && formUserCacheErr != monc.ErrNotFound {
+			return formUserCacheErr
+		}
+
+		if formUserCacheErr == monc.ErrNotFound {
+
+			updateCacheErr := m.conn.SetCache(fromUserCacheKey, newData)
+			if updateCacheErr != nil {
+				return updateCacheErr
+			}
+		}
+
+		if cacheData.ID != primitive.NilObjectID {
+			cacheData.MessageList = append(cacheData.MessageList, newData.MessageList...)
+			m.conn.SetCache(fromUserCacheKey, cacheData)
 		}
 
 		return nil
@@ -151,8 +213,47 @@ func (m *businessMessageModel) PutMessageIntoUserMessageList(ctx context.Context
 		return updateErr
 	}
 
-	if updateRes.MatchedCount == 0 {
-		return monc.ErrNotFound
+	if updateRes.ModifiedCount == 0 {
+		return errors.New("update failed")
+	}
+
+	cacheData := Message{}
+	// 更新缓存
+	formUserCacheErr := m.conn.GetCache(fromUserCacheKey, &cacheData)
+	if formUserCacheErr != nil && formUserCacheErr != monc.ErrNotFound {
+		return formUserCacheErr
+	}
+
+	filteredMessageList := []MessageItem{}
+
+	for _, item := range data.MessageList {
+		if item.FromUserId == fromUserId {
+			filteredMessageList = append(filteredMessageList, item)
+		}
+	}
+
+	if formUserCacheErr == monc.ErrNotFound {
+		updateCacheErr := m.conn.SetCache(fromUserCacheKey, Message{
+			ID:          data.ID,
+			CreateAt:    data.CreateAt,
+			UpdateAt:    data.UpdateAt,
+			InboxUserId: data.InboxUserId,
+			MessageList: filteredMessageList,
+		})
+
+		if updateCacheErr != nil {
+			return updateCacheErr
+		}
+	}
+
+	if cacheData.ID != primitive.NilObjectID {
+		m.conn.SetCache(fromUserCacheKey, Message{
+			ID:          data.ID,
+			CreateAt:    data.CreateAt,
+			UpdateAt:    data.UpdateAt,
+			InboxUserId: data.InboxUserId,
+			MessageList: filteredMessageList,
+		})
 	}
 
 	return nil
