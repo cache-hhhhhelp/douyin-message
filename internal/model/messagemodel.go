@@ -114,15 +114,18 @@ func (m *businessMessageModel) GetMessageListByUserId(ctx context.Context, userI
 
 	switch err {
 	case nil:
-		// 更新缓存
 		if len(aggregatedData) == 0 {
 			return &Message{}, nil
 		}
+		// 异步更新缓存
+		go func(m *businessMessageModel, fromCacheKey string, aggregatedData []Message) {
+			updateCacheErr := m.conn.SetCache(fromCacheKey, aggregatedData[0])
+			if updateCacheErr != nil {
+				// log
+				_ = errors.New("update cache error")
+			}
+		}(m, fromCacheKey, aggregatedData)
 
-		updateCacheErr := m.conn.SetCache(fromCacheKey, aggregatedData[0])
-		if updateCacheErr != nil {
-			return nil, updateCacheErr
-		}
 		return &aggregatedData[0], nil
 	case monc.ErrNotFound:
 		// 查不到当前用户名，返回空
@@ -172,26 +175,30 @@ func (m *businessMessageModel) PutMessageIntoUserMessageList(ctx context.Context
 			return insertErr
 		}
 
-		cacheData := Message{}
+		// 异步更新缓存
+		go func(m *businessMessageModel, fromUserCacheKey string, newData Message) {
+			cacheData := Message{}
 
-		// 更新缓存
-		formUserCacheErr := m.conn.GetCache(fromUserCacheKey, &cacheData)
-		if formUserCacheErr != nil && formUserCacheErr != monc.ErrNotFound {
-			return formUserCacheErr
-		}
+			formUserCacheErr := m.conn.GetCache(fromUserCacheKey, &cacheData)
 
-		if formUserCacheErr == monc.ErrNotFound {
-
-			updateCacheErr := m.conn.SetCache(fromUserCacheKey, newData)
-			if updateCacheErr != nil {
-				return updateCacheErr
+			if formUserCacheErr != nil && formUserCacheErr != monc.ErrNotFound {
+				// log
+				_ = errors.New("get cache error")
 			}
-		}
 
-		if cacheData.ID != primitive.NilObjectID {
-			cacheData.MessageList = append(cacheData.MessageList, newData.MessageList...)
-			m.conn.SetCache(fromUserCacheKey, cacheData)
-		}
+			if formUserCacheErr == monc.ErrNotFound {
+				updateCacheErr := m.conn.SetCache(fromUserCacheKey, newData)
+				if updateCacheErr != nil {
+					// log
+					_ = errors.New("update cache error")
+				}
+			}
+
+			if cacheData.ID != primitive.NilObjectID {
+				cacheData.MessageList = append(cacheData.MessageList, newData.MessageList...)
+				m.conn.SetCache(fromUserCacheKey, cacheData)
+			}
+		}(m, fromUserCacheKey, newData)
 
 		return nil
 	}
@@ -218,43 +225,47 @@ func (m *businessMessageModel) PutMessageIntoUserMessageList(ctx context.Context
 	}
 
 	cacheData := Message{}
-	// 更新缓存
 	formUserCacheErr := m.conn.GetCache(fromUserCacheKey, &cacheData)
 	if formUserCacheErr != nil && formUserCacheErr != monc.ErrNotFound {
 		return formUserCacheErr
 	}
 
-	filteredMessageList := []MessageItem{}
+	// 异步更新缓存
+	go func(m *businessMessageModel, data Message, fromUserCacheKey string, cacheData Message) {
 
-	for _, item := range data.MessageList {
-		if item.FromUserId == fromUserId {
-			filteredMessageList = append(filteredMessageList, item)
+		filteredMessageList := []MessageItem{}
+
+		for _, item := range data.MessageList {
+			if item.FromUserId == fromUserId {
+				filteredMessageList = append(filteredMessageList, item)
+			}
 		}
-	}
 
-	if formUserCacheErr == monc.ErrNotFound {
-		updateCacheErr := m.conn.SetCache(fromUserCacheKey, Message{
-			ID:          data.ID,
-			CreateAt:    data.CreateAt,
-			UpdateAt:    data.UpdateAt,
-			InboxUserId: data.InboxUserId,
-			MessageList: filteredMessageList,
-		})
+		if formUserCacheErr == monc.ErrNotFound {
+			updateCacheErr := m.conn.SetCache(fromUserCacheKey, Message{
+				ID:          data.ID,
+				CreateAt:    data.CreateAt,
+				UpdateAt:    data.UpdateAt,
+				InboxUserId: data.InboxUserId,
+				MessageList: filteredMessageList,
+			})
 
-		if updateCacheErr != nil {
-			return updateCacheErr
+			if updateCacheErr != nil {
+				// log
+				_ = errors.New("update cache error")
+			}
 		}
-	}
 
-	if cacheData.ID != primitive.NilObjectID {
-		m.conn.SetCache(fromUserCacheKey, Message{
-			ID:          data.ID,
-			CreateAt:    data.CreateAt,
-			UpdateAt:    data.UpdateAt,
-			InboxUserId: data.InboxUserId,
-			MessageList: filteredMessageList,
-		})
-	}
+		if cacheData.ID != primitive.NilObjectID {
+			m.conn.SetCache(fromUserCacheKey, Message{
+				ID:          data.ID,
+				CreateAt:    data.CreateAt,
+				UpdateAt:    data.UpdateAt,
+				InboxUserId: data.InboxUserId,
+				MessageList: filteredMessageList,
+			})
+		}
+	}(m, data, fromUserCacheKey, cacheData)
 
 	return nil
 }
